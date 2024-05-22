@@ -2,26 +2,26 @@ use std::cmp::Ordering;
 
 #[derive(Debug, PartialEq)]
 pub enum InsertResult<'a, T, const N: usize> {
-    Inserted(ReliabilityBufferIterator<'a, T, N>),
-    PacketExpired,
+    Inserted(OrderedBufferIterator<'a, T, N>),
+    Expired,
     Duplicate,
     WrappedAround,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct ReliabilityBuffer<T, const N: usize> {
+pub struct OrderedBuffer<T, const N: usize> {
     items: [Option<(u64, T)>; N],
     read_pos: usize,
     next_sequence_number: u64,
 }
 
-impl<T: std::fmt::Display, const N: usize> Default for ReliabilityBuffer<T, N> {
+impl<T, const N: usize> Default for OrderedBuffer<T, N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
+impl<T, const N: usize> OrderedBuffer<T, N> {
     pub fn new() -> Self {
         Self { items: std::array::from_fn(|_| None), read_pos: 0, next_sequence_number: 0 }
     }
@@ -33,7 +33,7 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
             Some((existing_sequence_number, _item)) => {
                 match new_sequence_number.cmp(existing_sequence_number) {
                     // TODO(bschwind) - I don't think we'll actually ever hit this case.
-                    Ordering::Less => InsertResult::PacketExpired,
+                    Ordering::Less => InsertResult::Expired,
                     // There is already a message here with the same sequence number.
                     Ordering::Equal => InsertResult::Duplicate,
                     // There's already a message here with a lower sequence number, this new
@@ -56,7 +56,7 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
 
                 self.items[new_slot] = Some((new_sequence_number, item));
 
-                InsertResult::Inserted(ReliabilityBufferIterator { buffer: self })
+                InsertResult::Inserted(OrderedBufferIterator { buffer: self })
             },
         }
     }
@@ -69,12 +69,13 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct ReliabilityBufferIterator<'a, T, const N: usize> {
-    buffer: &'a mut ReliabilityBuffer<T, N>,
+pub struct OrderedBufferIterator<'a, T, const N: usize> {
+    buffer: &'a mut OrderedBuffer<T, N>,
 }
 
-impl<T, const N: usize> Drop for ReliabilityBufferIterator<'_, T, N> {
+impl<T, const N: usize> Drop for OrderedBufferIterator<'_, T, N> {
     fn drop(&mut self) {
+        // TODO(bschwind) - Is this needed?
         // Exhaust all items in self if they aren't used so that
         // the buffer is returned to a good state.
         for item in self {
@@ -83,7 +84,7 @@ impl<T, const N: usize> Drop for ReliabilityBufferIterator<'_, T, N> {
     }
 }
 
-impl<T, const N: usize> Iterator for ReliabilityBufferIterator<'_, T, N> {
+impl<T, const N: usize> Iterator for OrderedBufferIterator<'_, T, N> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -117,7 +118,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let mut buffer: ReliabilityBuffer<&str, 5> = ReliabilityBuffer::new();
+        let mut buffer: OrderedBuffer<&str, 5> = OrderedBuffer::new();
 
         assert_eq!(buffer.insert(0, "0").to_vec(), vec!["0"]);
 

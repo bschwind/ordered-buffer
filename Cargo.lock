@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "reliability-buffer"
+name = "ordered-buffer"
 version = "0.1.0"

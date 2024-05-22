@@ -11,7 +11,6 @@ pub enum InsertResult<'a, T, const N: usize> {
 #[derive(Debug, PartialEq)]
 pub struct ReliabilityBuffer<T, const N: usize> {
     items: [Option<(u64, T)>; N],
-    next_slot: usize,
     read_pos: usize,
     next_sequence_number: u64,
 }
@@ -24,12 +23,7 @@ impl<T: std::fmt::Display, const N: usize> Default for ReliabilityBuffer<T, N> {
 
 impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
     pub fn new() -> Self {
-        Self {
-            items: std::array::from_fn(|_| None),
-            next_slot: 0,
-            read_pos: 0,
-            next_sequence_number: 0,
-        }
+        Self { items: std::array::from_fn(|_| None), read_pos: 0, next_sequence_number: 0 }
     }
 
     pub fn insert(&mut self, new_sequence_number: u64, item: T) -> InsertResult<T, N> {
@@ -38,28 +32,29 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
         match &self.items[new_slot] {
             Some((existing_sequence_number, _item)) => {
                 match new_sequence_number.cmp(existing_sequence_number) {
-                    Ordering::Less => {
-                        // TODO(bschwind) - I don't think we'll actually ever hit this case.
-                        InsertResult::PacketExpired
-                    },
+                    // TODO(bschwind) - I don't think we'll actually ever hit this case.
+                    Ordering::Less => InsertResult::PacketExpired,
+                    // There is already a message here with the same sequence number.
                     Ordering::Equal => InsertResult::Duplicate,
+                    // There's already a message here with a lower sequence number, this new
+                    // one is so far ahead it wrapped around our items buffer.
                     Ordering::Greater => InsertResult::WrappedAround,
                 }
             },
             None => {
                 if new_sequence_number as usize >= self.next_sequence_number as usize + N {
+                    // There is a free slot, but this sequence number is too far beyond the number
+                    // of messages we can buffer.
                     return InsertResult::WrappedAround;
                 }
 
                 if new_sequence_number < self.next_sequence_number {
+                    // `self.next_sequence_number` only advances when ordered messages are delivered
+                    // to the caller, anything less has already been delivered.
                     return InsertResult::Duplicate;
                 }
 
                 self.items[new_slot] = Some((new_sequence_number, item));
-
-                if new_slot == self.next_slot {
-                    self.next_slot = (self.next_slot + 1) % N;
-                }
 
                 InsertResult::Inserted(ReliabilityBufferIterator { buffer: self })
             },
@@ -68,7 +63,6 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
 
     pub fn reset(&mut self) {
         self.items = std::array::from_fn(|_| None);
-        self.next_slot = 0;
         self.read_pos = 0;
         self.next_sequence_number = 0;
     }
@@ -93,6 +87,7 @@ impl<T, const N: usize> Iterator for ReliabilityBufferIterator<'_, T, N> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
+        // Keep returning items while the item at our read_pos is Some(_).
         self.buffer.items[self.buffer.read_pos].take().map(|(sequence_number, msg)| {
             self.buffer.read_pos = (self.buffer.read_pos + 1) % N;
             self.buffer.next_sequence_number = sequence_number + 1;

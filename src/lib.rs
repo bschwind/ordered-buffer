@@ -1,13 +1,14 @@
 use std::cmp::Ordering;
 
 #[derive(Debug, PartialEq)]
-pub enum InsertError {
+pub enum InsertResult<'a, T, const N: usize> {
+    Inserted(ReliabilityBufferIterator<'a, T, N>),
     PacketExpired,
     Duplicate,
     WrappedAround,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReliabilityBuffer<T, const N: usize> {
     items: [Option<(u64, T)>; N],
     next_slot: usize,
@@ -31,41 +32,27 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
         }
     }
 
-    pub fn insert(
-        &mut self,
-        new_sequence_number: u64,
-        item: T,
-    ) -> Result<ReliabilityBufferIterator<T, N>, InsertError> {
-        println!();
-        println!("Insert {item} at {new_sequence_number}");
+    pub fn insert(&mut self, new_sequence_number: u64, item: T) -> InsertResult<T, N> {
         let new_slot = new_sequence_number as usize % N;
 
         match &self.items[new_slot] {
             Some((existing_sequence_number, _item)) => {
                 match new_sequence_number.cmp(existing_sequence_number) {
                     Ordering::Less => {
-                        Err(InsertError::PacketExpired)
-                        // println!("Expired!");
+                        // TODO(bschwind) - I don't think we'll actually ever hit this case.
+                        InsertResult::PacketExpired
                     },
-                    Ordering::Equal => {
-                        Err(InsertError::Duplicate)
-                        // println!("Duplicate!");
-                    },
-                    Ordering::Greater => {
-                        Err(InsertError::WrappedAround)
-                        // println!("WrappedAround!");
-                    },
+                    Ordering::Equal => InsertResult::Duplicate,
+                    Ordering::Greater => InsertResult::WrappedAround,
                 }
             },
             None => {
                 if new_sequence_number as usize >= self.next_sequence_number as usize + N {
-                    // println!("WrappedAround!");
-                    return Err(InsertError::WrappedAround);
+                    return InsertResult::WrappedAround;
                 }
 
-                if new_sequence_number as usize + N <= self.next_sequence_number as usize {
-                    // println!("Expired!");
-                    return Err(InsertError::PacketExpired);
+                if new_sequence_number < self.next_sequence_number {
+                    return InsertResult::Duplicate;
                 }
 
                 self.items[new_slot] = Some((new_sequence_number, item));
@@ -74,14 +61,7 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
                     self.next_slot = (self.next_slot + 1) % N;
                 }
 
-                Ok(ReliabilityBufferIterator { buffer: self })
-
-                // // iterate from read_pos until we hit None
-                // while let Some((sequence_number, msg)) = self.items[self.read_pos].take() {
-                //     println!("\tReturn {msg}");
-                //     self.read_pos = (self.read_pos + 1) % N;
-                //     self.next_sequence_number = sequence_number + 1;
-                // }
+                InsertResult::Inserted(ReliabilityBufferIterator { buffer: self })
             },
         }
     }
@@ -94,9 +74,19 @@ impl<T: std::fmt::Display, const N: usize> ReliabilityBuffer<T, N> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReliabilityBufferIterator<'a, T, const N: usize> {
     buffer: &'a mut ReliabilityBuffer<T, N>,
+}
+
+impl<T, const N: usize> Drop for ReliabilityBufferIterator<'_, T, N> {
+    fn drop(&mut self) {
+        // Exhaust all items in self if they aren't used so that
+        // the buffer is returned to a good state.
+        for item in self {
+            drop(item);
+        }
+    }
 }
 
 impl<T, const N: usize> Iterator for ReliabilityBufferIterator<'_, T, N> {
@@ -108,13 +98,6 @@ impl<T, const N: usize> Iterator for ReliabilityBufferIterator<'_, T, N> {
             self.buffer.next_sequence_number = sequence_number + 1;
             msg
         })
-        // // iterate from read_pos until we hit None
-        // while let Some((sequence_number, msg)) = self.items[self.read_pos].take() {
-        //     println!("\tReturn {msg}");
-        //     self.read_pos = (self.read_pos + 1) % N;
-        //     self.next_sequence_number = sequence_number + 1;
-        // }
-        // None
     }
 }
 
@@ -122,82 +105,51 @@ impl<T, const N: usize> Iterator for ReliabilityBufferIterator<'_, T, N> {
 mod tests {
     use super::*;
 
+    trait ToVec<T, const N: usize> {
+        fn to_vec(self) -> Vec<T>;
+    }
+
+    impl<T: std::fmt::Debug, const N: usize> ToVec<T, N> for InsertResult<'_, T, N> {
+        fn to_vec(self) -> std::vec::Vec<T> {
+            match self {
+                InsertResult::Inserted(iterator) => iterator.collect(),
+                _ => {
+                    panic!("Expected self to be InsertResult::Inserted, but was actually {self:?}")
+                },
+            }
+        }
+    }
+
     #[test]
     fn it_works() {
         let mut buffer: ReliabilityBuffer<&str, 5> = ReliabilityBuffer::new();
-        println!("{:?}", buffer);
 
-        for msg in buffer.insert(0, "0").unwrap() {
-            println!("\t{msg}");
-        }
+        assert_eq!(buffer.insert(0, "0").to_vec(), vec!["0"]);
 
-        for msg in buffer.insert(1, "1").unwrap() {
-            println!("\t{msg}");
-        }
+        assert_eq!(buffer.insert(1, "1").to_vec(), vec!["1"]);
+        assert!(buffer.insert(3, "3").to_vec().is_empty());
+        assert_eq!(buffer.insert(2, "2").to_vec(), vec!["2", "3"]);
 
-        for msg in buffer.insert(3, "3").unwrap() {
-            println!("\t{msg}");
-        }
+        assert!(buffer.insert(6, "6").to_vec().is_empty());
+        assert!(buffer.insert(5, "5").to_vec().is_empty());
+        assert_eq!(buffer.insert(4, "4").to_vec(), vec!["4", "5", "6"]);
 
-        for msg in buffer.insert(2, "2").unwrap() {
-            println!("\t{msg}");
-        }
+        assert!(buffer.insert(11, "11").to_vec().is_empty());
+        assert!(buffer.insert(10, "10").to_vec().is_empty());
+        assert!(buffer.insert(9, "9").to_vec().is_empty());
+        assert!(buffer.insert(8, "8").to_vec().is_empty());
+        assert_eq!(buffer.insert(7, "7").to_vec(), vec!["7", "8", "9", "10", "11"]);
 
-        for msg in buffer.insert(6, "6").unwrap() {
-            println!("\t{msg}");
-        }
+        assert_eq!(buffer.insert(7, "7"), InsertResult::Duplicate);
 
-        for msg in buffer.insert(5, "5").unwrap() {
-            println!("\t{msg}");
-        }
+        assert_eq!(buffer.insert(17, "17"), InsertResult::WrappedAround);
 
-        for msg in buffer.insert(4, "4").unwrap() {
-            println!("\t{msg}");
-        }
+        assert!(buffer.insert(16, "16").to_vec().is_empty());
+        assert_eq!(buffer.insert(12, "12").to_vec(), vec!["12"]);
+        assert!(buffer.insert(15, "15").to_vec().is_empty());
+        assert!(buffer.insert(14, "14").to_vec().is_empty());
+        assert_eq!(buffer.insert(13, "13").to_vec(), vec!["13", "14", "15", "16"]);
 
-        for msg in buffer.insert(11, "11").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(10, "10").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(9, "9").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(8, "8").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(7, "7").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(16, "16").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(12, "12").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(15, "15").unwrap() {
-            println!("\t{msg}");
-        }
-
-        assert_eq!(buffer.insert(15, "15").unwrap_err(), InsertError::Duplicate);
-        assert_eq!(buffer.insert(15, "15").unwrap_err(), InsertError::Duplicate);
-
-        for msg in buffer.insert(14, "14").unwrap() {
-            println!("\t{msg}");
-        }
-
-        for msg in buffer.insert(13, "13").unwrap() {
-            println!("\t{msg}");
-        }
-
-        assert_eq!(buffer.insert(2, "2").unwrap_err(), InsertError::PacketExpired);
+        assert_eq!(buffer.insert(2, "2"), InsertResult::Duplicate);
     }
 }

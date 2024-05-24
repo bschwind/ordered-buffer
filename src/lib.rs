@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, iter::FusedIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum InsertResult<'a, T, const N: usize> {
@@ -72,6 +72,8 @@ impl<T, const N: usize> OrderedBuffer<T, N> {
 pub struct OrderedBufferIterator<'a, T, const N: usize> {
     buffer: &'a mut OrderedBuffer<T, N>,
 }
+
+impl<T, const N: usize> FusedIterator for OrderedBufferIterator<'_, T, N> {}
 
 impl<T, const N: usize> Drop for OrderedBufferIterator<'_, T, N> {
     fn drop(&mut self) {

@@ -21,8 +21,15 @@ impl<T, const N: usize> Default for OrderedBuffer<T, N> {
     }
 }
 
+const fn assert_buffer_size(n: usize) {
+    assert!(n > 0);
+}
+
 impl<T, const N: usize> OrderedBuffer<T, N> {
+    const BUFFER_SIZE_CHECK: () = assert_buffer_size(N);
+
     pub fn new() -> Self {
+        let () = Self::BUFFER_SIZE_CHECK;
         Self { items: std::array::from_fn(|_| None), read_pos: 0, next_sequence_number: 0 }
     }
 
@@ -120,11 +127,11 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let mut buffer: OrderedBuffer<&str, 5> = OrderedBuffer::new();
+        let mut buffer: OrderedBuffer<&str, 0> = OrderedBuffer::new();
 
         assert_eq!(buffer.insert(0, "0").to_vec(), vec!["0"]);
-
         assert_eq!(buffer.insert(1, "1").to_vec(), vec!["1"]);
+
         assert!(buffer.insert(3, "3").to_vec().is_empty());
         assert_eq!(buffer.insert(2, "2").to_vec(), vec!["2", "3"]);
 

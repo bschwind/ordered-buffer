@@ -1,10 +1,10 @@
 use std::{cmp::Ordering, iter::FusedIterator};
 
+#[must_use]
 #[derive(Debug, PartialEq)]
-pub enum InsertResult<'a, T, const N: usize> {
-    /// The message was successfully inserted, use the iterator
-    /// to receive all messages available so far in order.
-    Inserted(OrderedBufferIterator<'a, T, N>),
+pub enum InsertResult {
+    /// The message was successfully inserted.
+    Inserted,
 
     /// The message has expired and cannot be buffered.
     Expired,
@@ -49,7 +49,7 @@ impl<T, const N: usize> OrderedBuffer<T, N> {
     }
 
     /// Inserts an item with a given sequence number.
-    pub fn insert(&mut self, new_sequence_number: u64, item: T) -> InsertResult<T, N> {
+    pub fn insert(&mut self, new_sequence_number: u64, item: T) -> InsertResult {
         let new_slot = new_sequence_number as usize % N;
 
         match &self.items[new_slot] {
@@ -79,7 +79,7 @@ impl<T, const N: usize> OrderedBuffer<T, N> {
 
                 self.items[new_slot] = Some((new_sequence_number, item));
 
-                InsertResult::Inserted(OrderedBufferIterator { buffer: self })
+                InsertResult::Inserted
             },
         }
     }
@@ -92,32 +92,16 @@ impl<T, const N: usize> OrderedBuffer<T, N> {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub struct OrderedBufferIterator<'a, T, const N: usize> {
-    buffer: &'a mut OrderedBuffer<T, N>,
-}
+impl<T, const N: usize> FusedIterator for &mut OrderedBuffer<T, N> {}
 
-impl<T, const N: usize> FusedIterator for OrderedBufferIterator<'_, T, N> {}
-
-impl<T, const N: usize> Drop for OrderedBufferIterator<'_, T, N> {
-    fn drop(&mut self) {
-        // TODO(bschwind) - Is this needed?
-        // Exhaust all items in self if they aren't used so that
-        // the buffer is returned to a good state.
-        for item in self {
-            drop(item);
-        }
-    }
-}
-
-impl<T, const N: usize> Iterator for OrderedBufferIterator<'_, T, N> {
+impl<T, const N: usize> Iterator for &mut OrderedBuffer<T, N> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
         // Keep returning items while the item at our read_pos is Some(_).
-        self.buffer.items[self.buffer.read_pos].take().map(|(sequence_number, msg)| {
-            self.buffer.read_pos = (self.buffer.read_pos + 1) % N;
-            self.buffer.next_sequence_number = sequence_number + 1;
+        self.items[self.read_pos].take().map(|(sequence_number, msg)| {
+            self.read_pos = (self.read_pos + 1) % N;
+            self.next_sequence_number = sequence_number + 1;
             msg
         })
     }
@@ -127,18 +111,13 @@ impl<T, const N: usize> Iterator for OrderedBufferIterator<'_, T, N> {
 mod tests {
     use super::*;
 
-    trait ToVec<T, const N: usize> {
-        fn to_vec(self) -> Vec<T>;
+    trait Consume<T, const N: usize> {
+        fn consume(&mut self) -> Vec<T>;
     }
 
-    impl<T: std::fmt::Debug, const N: usize> ToVec<T, N> for InsertResult<'_, T, N> {
-        fn to_vec(self) -> std::vec::Vec<T> {
-            match self {
-                InsertResult::Inserted(iterator) => iterator.collect(),
-                _ => {
-                    panic!("Expected self to be InsertResult::Inserted, but was actually {self:?}")
-                },
-            }
+    impl<T: Clone + std::fmt::Debug, const N: usize> Consume<T, N> for OrderedBuffer<T, N> {
+        fn consume(&mut self) -> std::vec::Vec<T> {
+            self.collect()
         }
     }
 
@@ -147,85 +126,105 @@ mod tests {
         let mut buffer: OrderedBuffer<_, 5> = OrderedBuffer::new();
 
         // [_, _, _, _, _]
-        let result = buffer.insert(0, "0");
+        let _ = buffer.insert(0, "0");
         // [0, _, _, _, _]
-        assert_eq!(result.to_vec(), vec!["0"]);
+        assert_eq!(buffer.consume(), vec!["0"]);
         // [_, _, _, _, _]
-        let result = buffer.insert(1, "1");
+        let _ = buffer.insert(1, "1");
         // [_, 1, _, _, _]
-        assert_eq!(result.to_vec(), vec!["1"]);
+        assert_eq!(buffer.consume(), vec!["1"]);
         // [_, _, _, _, _]
-        let result = buffer.insert(3, "3");
+        let _ = buffer.insert(3, "3");
         // [_, _, _, 3, _]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [_, _, _, 3, _]
-        let result = buffer.insert(2, "2");
+        let _ = buffer.insert(2, "2");
         // [_, _, 2, 3, _]
-        assert_eq!(result.to_vec(), vec!["2", "3"]);
+        assert_eq!(buffer.consume(), vec!["2", "3"]);
         // [_, _, _, _, _]
-        let result = buffer.insert(6, "6");
+        let _ = buffer.insert(6, "6");
         // [_, 6, _, _, _]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [_, 6, _, _, _]
-        let result = buffer.insert(5, "5");
+        let _ = buffer.insert(5, "5");
         // [5, 6, _, _, _]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [5, 6, _, _, _]
-        let result = buffer.insert(4, "4");
+        let _ = buffer.insert(4, "4");
         // [5, 6, _, _, 4]
-        assert_eq!(result.to_vec(), vec!["4", "5", "6"]);
+        assert_eq!(buffer.consume(), vec!["4", "5", "6"]);
         // [_, _, _, _, _]
-        let result = buffer.insert(11, "11");
+        let _ = buffer.insert(11, "11");
         // [_, 11, _, _, _]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [_, 11, _, _, _]
-        let result = buffer.insert(10, "10");
+        let _ = buffer.insert(10, "10");
         // [10, 11, _, _, _]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [10, 11, _, _, _]
-        let result = buffer.insert(9, "9");
+        let _ = buffer.insert(9, "9");
         // [10, 11, _, _, 9]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [10, 11, _, _, 9]
-        let result = buffer.insert(8, "8");
+        let _ = buffer.insert(8, "8");
         // [10, 11, _, 8, 9]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [10, 11, _, 8, 9]
-        let result = buffer.insert(7, "7");
+        let _ = buffer.insert(7, "7");
         // [10, 11, 7, 8, 9]
-        assert_eq!(result.to_vec(), vec!["7", "8", "9", "10", "11"]);
+        assert_eq!(buffer.consume(), vec!["7", "8", "9", "10", "11"]);
         // [_, _, _, _, _]
-        let result = buffer.insert(7, "7");
+        assert_eq!(buffer.insert(7, "7"), InsertResult::Duplicate);
         // [_, _, _, _, _]
-        assert_eq!(result, InsertResult::Duplicate);
-        drop(result);
+        assert_eq!(buffer.insert(17, "17"), InsertResult::FullBuffer);
         // [_, _, _, _, _]
-        let result = buffer.insert(17, "17");
-        // [_, _, _, _, _]
-        assert_eq!(result, InsertResult::FullBuffer);
-        drop(result);
-        // [_, _, _, _, _]
-        let result = buffer.insert(16, "16");
+        let _ = buffer.insert(16, "16");
         // [_, 16, _, _, _]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [_, 16, _, _, _]
-        let result = buffer.insert(12, "12");
+        let _ = buffer.insert(12, "12");
         // [_, 16, 12, _, _]
-        assert_eq!(result.to_vec(), vec!["12"]);
+        assert_eq!(buffer.consume(), vec!["12"]);
         // [_, 16, _, _, _]
-        let result = buffer.insert(15, "15");
+        let _ = buffer.insert(15, "15");
         // [15, 16, _, _, _]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [15, 16, _, _, _]
-        let result = buffer.insert(14, "14");
+        let _ = buffer.insert(14, "14");
         // [15, 16, _, _, 14]
-        assert!(result.to_vec().is_empty());
+        assert!(buffer.consume().is_empty());
         // [15, 16, _, _, 14]
-        let result = buffer.insert(13, "13");
+        let _ = buffer.insert(13, "13");
         // [15, 16, _, 13, 14]
-        assert_eq!(result.to_vec(), vec!["13", "14", "15", "16"]);
+        assert_eq!(buffer.consume(), vec!["13", "14", "15", "16"]);
         // [_, _, _, _, _]
         assert_eq!(buffer.insert(2, "2"), InsertResult::Duplicate);
         // [_, _, _, _, _]
+    }
+
+    #[test]
+    fn multiple_inserts() {
+        let mut buffer: OrderedBuffer<_, 5> = OrderedBuffer::new();
+
+        let _ = buffer.insert(0, "0");
+        let _ = buffer.insert(1, "1");
+        let _ = buffer.insert(2, "2");
+        let _ = buffer.insert(3, "3");
+        let _ = buffer.insert(4, "4");
+
+        assert_eq!(buffer.consume(), vec!["0", "1", "2", "3", "4"]);
+    }
+
+    #[test]
+    fn multiple_inserts_backwards() {
+        let mut buffer: OrderedBuffer<_, 5> = OrderedBuffer::new();
+
+        let _ = buffer.insert(4, "4");
+        let _ = buffer.insert(3, "3");
+        let _ = buffer.insert(2, "2");
+        let _ = buffer.insert(1, "1");
+        let _ = buffer.insert(0, "0");
+
+        assert_eq!(buffer.consume(), vec!["0", "1", "2", "3", "4"]);
     }
 }

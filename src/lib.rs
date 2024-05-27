@@ -2,12 +2,27 @@ use std::{cmp::Ordering, iter::FusedIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum InsertResult<'a, T, const N: usize> {
+    /// The message was successfully inserted, use the iterator
+    /// to receive all messages available so far in order.
     Inserted(OrderedBufferIterator<'a, T, N>),
+
+    /// The message has expired and cannot be buffered.
     Expired,
+
+    /// The message has already been received.
     Duplicate,
-    WrappedAround,
+
+    /// There is a packet missing but so many more recent
+    /// messages have arrived that we can no longer buffer them.
+    FullBuffer,
 }
 
+/// A buffer which can have messages inserted in any order, and
+/// have them delivered in order as soon as possible, with no
+/// duplicates and a configurable maximum number of messages to
+/// buffer.
+/// Mainly intended for receiving out-of-order and duplicate
+/// network packets.
 #[derive(Debug, PartialEq)]
 pub struct OrderedBuffer<T, const N: usize> {
     items: [Option<(u64, T)>; N],
@@ -33,6 +48,7 @@ impl<T, const N: usize> OrderedBuffer<T, N> {
         Self { items: std::array::from_fn(|_| None), read_pos: 0, next_sequence_number: 0 }
     }
 
+    /// Inserts an item with a given sequence number.
     pub fn insert(&mut self, new_sequence_number: u64, item: T) -> InsertResult<T, N> {
         let new_slot = new_sequence_number as usize % N;
 
@@ -45,14 +61,14 @@ impl<T, const N: usize> OrderedBuffer<T, N> {
                     Ordering::Equal => InsertResult::Duplicate,
                     // There's already a message here with a lower sequence number, this new
                     // one is so far ahead it wrapped around our items buffer.
-                    Ordering::Greater => InsertResult::WrappedAround,
+                    Ordering::Greater => InsertResult::FullBuffer,
                 }
             },
             None => {
                 if new_sequence_number as usize >= self.next_sequence_number as usize + N {
                     // There is a free slot, but this sequence number is too far beyond the number
                     // of messages we can buffer.
-                    return InsertResult::WrappedAround;
+                    return InsertResult::FullBuffer;
                 }
 
                 if new_sequence_number < self.next_sequence_number {
@@ -68,6 +84,7 @@ impl<T, const N: usize> OrderedBuffer<T, N> {
         }
     }
 
+    /// Clears the buffer and resets all counters.
     pub fn reset(&mut self) {
         self.items = std::array::from_fn(|_| None);
         self.read_pos = 0;
@@ -127,7 +144,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let mut buffer: OrderedBuffer<&str, 0> = OrderedBuffer::new();
+        let mut buffer: OrderedBuffer<_, 5> = OrderedBuffer::new();
 
         assert_eq!(buffer.insert(0, "0").to_vec(), vec!["0"]);
         assert_eq!(buffer.insert(1, "1").to_vec(), vec!["1"]);
@@ -147,7 +164,7 @@ mod tests {
 
         assert_eq!(buffer.insert(7, "7"), InsertResult::Duplicate);
 
-        assert_eq!(buffer.insert(17, "17"), InsertResult::WrappedAround);
+        assert_eq!(buffer.insert(17, "17"), InsertResult::FullBuffer);
 
         assert!(buffer.insert(16, "16").to_vec().is_empty());
         assert_eq!(buffer.insert(12, "12").to_vec(), vec!["12"]);

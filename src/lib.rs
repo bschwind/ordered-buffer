@@ -146,32 +146,86 @@ mod tests {
     fn it_works() {
         let mut buffer: OrderedBuffer<_, 5> = OrderedBuffer::new();
 
-        assert_eq!(buffer.insert(0, "0").to_vec(), vec!["0"]);
-        assert_eq!(buffer.insert(1, "1").to_vec(), vec!["1"]);
-
-        assert!(buffer.insert(3, "3").to_vec().is_empty());
-        assert_eq!(buffer.insert(2, "2").to_vec(), vec!["2", "3"]);
-
-        assert!(buffer.insert(6, "6").to_vec().is_empty());
-        assert!(buffer.insert(5, "5").to_vec().is_empty());
-        assert_eq!(buffer.insert(4, "4").to_vec(), vec!["4", "5", "6"]);
-
-        assert!(buffer.insert(11, "11").to_vec().is_empty());
-        assert!(buffer.insert(10, "10").to_vec().is_empty());
-        assert!(buffer.insert(9, "9").to_vec().is_empty());
-        assert!(buffer.insert(8, "8").to_vec().is_empty());
-        assert_eq!(buffer.insert(7, "7").to_vec(), vec!["7", "8", "9", "10", "11"]);
-
-        assert_eq!(buffer.insert(7, "7"), InsertResult::Duplicate);
-
-        assert_eq!(buffer.insert(17, "17"), InsertResult::FullBuffer);
-
-        assert!(buffer.insert(16, "16").to_vec().is_empty());
-        assert_eq!(buffer.insert(12, "12").to_vec(), vec!["12"]);
-        assert!(buffer.insert(15, "15").to_vec().is_empty());
-        assert!(buffer.insert(14, "14").to_vec().is_empty());
-        assert_eq!(buffer.insert(13, "13").to_vec(), vec!["13", "14", "15", "16"]);
-
+        // [_, _, _, _, _]
+        let result = buffer.insert(0, "0");
+        // [0, _, _, _, _]
+        assert_eq!(result.to_vec(), vec!["0"]);
+        // [_, _, _, _, _]
+        let result = buffer.insert(1, "1");
+        // [_, 1, _, _, _]
+        assert_eq!(result.to_vec(), vec!["1"]);
+        // [_, _, _, _, _]
+        let result = buffer.insert(3, "3");
+        // [_, _, _, 3, _]
+        assert!(result.to_vec().is_empty());
+        // [_, _, _, 3, _]
+        let result = buffer.insert(2, "2");
+        // [_, _, 2, 3, _]
+        assert_eq!(result.to_vec(), vec!["2", "3"]);
+        // [_, _, _, _, _]
+        let result = buffer.insert(6, "6");
+        // [_, 6, _, _, _]
+        assert!(result.to_vec().is_empty());
+        // [_, 6, _, _, _]
+        let result = buffer.insert(5, "5");
+        // [5, 6, _, _, _]
+        assert!(result.to_vec().is_empty());
+        // [5, 6, _, _, _]
+        let result = buffer.insert(4, "4");
+        // [5, 6, _, _, 4]
+        assert_eq!(result.to_vec(), vec!["4", "5", "6"]);
+        // [_, _, _, _, _]
+        let result = buffer.insert(11, "11");
+        // [_, 11, _, _, _]
+        assert!(result.to_vec().is_empty());
+        // [_, 11, _, _, _]
+        let result = buffer.insert(10, "10");
+        // [10, 11, _, _, _]
+        assert!(result.to_vec().is_empty());
+        // [10, 11, _, _, _]
+        let result = buffer.insert(9, "9");
+        // [10, 11, _, _, 9]
+        assert!(result.to_vec().is_empty());
+        // [10, 11, _, _, 9]
+        let result = buffer.insert(8, "8");
+        // [10, 11, _, 8, 9]
+        assert!(result.to_vec().is_empty());
+        // [10, 11, _, 8, 9]
+        let result = buffer.insert(7, "7");
+        // [10, 11, 7, 8, 9]
+        assert_eq!(result.to_vec(), vec!["7", "8", "9", "10", "11"]);
+        // [_, _, _, _, _]
+        let result = buffer.insert(7, "7");
+        // [_, _, _, _, _]
+        assert_eq!(result, InsertResult::Duplicate);
+        drop(result);
+        // [_, _, _, _, _]
+        let result = buffer.insert(17, "17");
+        // [_, _, _, _, _]
+        assert_eq!(result, InsertResult::FullBuffer);
+        drop(result);
+        // [_, _, _, _, _]
+        let result = buffer.insert(16, "16");
+        // [_, 16, _, _, _]
+        assert!(result.to_vec().is_empty());
+        // [_, 16, _, _, _]
+        let result = buffer.insert(12, "12");
+        // [_, 16, 12, _, _]
+        assert_eq!(result.to_vec(), vec!["12"]);
+        // [_, 16, _, _, _]
+        let result = buffer.insert(15, "15");
+        // [15, 16, _, _, _]
+        assert!(result.to_vec().is_empty());
+        // [15, 16, _, _, _]
+        let result = buffer.insert(14, "14");
+        // [15, 16, _, _, 14]
+        assert!(result.to_vec().is_empty());
+        // [15, 16, _, _, 14]
+        let result = buffer.insert(13, "13");
+        // [15, 16, _, 13, 14]
+        assert_eq!(result.to_vec(), vec!["13", "14", "15", "16"]);
+        // [_, _, _, _, _]
         assert_eq!(buffer.insert(2, "2"), InsertResult::Duplicate);
+        // [_, _, _, _, _]
     }
 }

@@ -36,15 +36,11 @@ impl<T, const N: usize> Default for OrderedBuffer<T, N> {
     }
 }
 
-const fn assert_buffer_size(n: usize) {
-    assert!(n > 0);
-}
-
 impl<T, const N: usize> OrderedBuffer<T, N> {
-    const BUFFER_SIZE_CHECK: () = assert_buffer_size(N);
-
     pub fn new() -> Self {
-        let () = Self::BUFFER_SIZE_CHECK;
+        // TODO - Eventually use a const assert once inline const is stabilized.
+        assert!(N > 0, "OrderedBuffer's size should be greater than zero.");
+
         Self { items: std::array::from_fn(|_| None), read_pos: 0, next_sequence_number: 0 }
     }
 
